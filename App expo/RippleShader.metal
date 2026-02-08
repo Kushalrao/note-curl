@@ -304,25 +304,43 @@ half4 pageCurl(
     }
 
     // === ZONE: Flat side (d < 0) ===
-    // Check if folded-back paper covers this pixel.
-    // Paper past the cylinder (flat distance s = pi*R - d from fold line)
-    // folds back and covers this position.
-    float2 backUV = uv + dir * (M_PI_F * R - 2.0 * d);
-    bool backCovers = (backUV.x >= 0.0 && backUV.x <= 1.0 &&
-                       backUV.y >= 0.0 && backUV.y <= 1.0);
+    // Folded-back paper follows a second, larger cylinder (radius R2)
+    // using asin mapping (like the main cylinder) for real visible curving.
+    // Screen distance = R2 * sin(theta2), so content foreshortens at the edge.
+    float R2 = R * mix(5.0, 1.5, progress);  // Gentle at start, tight curl as user drags more
+    float behindDist = -d;  // positive screen distance behind fold line
 
-    if (backCovers) {
-        half4 color = layer.sample(backUV * size);
-        float shadow = 0.85;  // 15% darkness on folded-back flat
-        color.rgb *= half3(shadow);
-        return color;
+    // Only visible if screen distance < R2 (paper has curled away past that)
+    if (behindDist < R2) {
+        // Inverse: screen height = R2 * sin(theta2), so theta2 = asin(behindDist / R2)
+        float theta2 = asin(clamp(behindDist / R2, 0.0, 1.0));
+
+        // Arc length on original paper = theta2 * R2 (NOT equal to behindDist)
+        float arcLen2 = theta2 * R2;
+        float origDist = M_PI_F * R + arcLen2;
+
+        // Fold line point for this pixel = uv - dir * d = uv + dir * behindDist
+        float2 foldPoint = uv + dir * behindDist;
+        float2 backUV = foldPoint + dir * origDist;
+
+        bool backCovers = (backUV.x >= 0.0 && backUV.x <= 1.0 &&
+                           backUV.y >= 0.0 && backUV.y <= 1.0);
+
+        if (backCovers) {
+            half4 color = layer.sample(backUV * size);
+            // Smooth darkness: 0.85 at fold line → 0.75 as it curls deeper
+            float curlT = theta2 / (M_PI_F / 2.0);  // 0 at fold, 1 at max visible
+            float shadow = mix(0.85, 0.75, curlT);
+            color.rgb *= half3(shadow);
+            return color;
+        }
     }
 
     // Original flat content with shadow near fold line
     // Smoothly fades from 0.85 (15% dark, matching cylinder front at fold) to 1.0
     half4 flat = layer.sample(position);
     if (d > -0.08) {
-        float shadowT = exp(d * 20.0);  // 1.0 at fold line, fades to ~0 at d=-0.08
+        float shadowT = exp(d * 20.0);
         float shade = mix(1.0, 0.85, shadowT);
         flat.rgb *= half3(shade);
     }
